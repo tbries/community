@@ -43,23 +43,22 @@ def main(config):
     )
 
 def get_times(stop_id, api_key):
-    cached = cache.get(stop_id)
-    if cached:
-        return json.decode(cached)
-    rep = http.get(API_ARRIVALS_AND_DEPARTURES % stop_id,
+    # Call API to get predictions for the given stop
+    rep = http.get(
+        url = API_ARRIVALS_AND_DEPARTURES % stop_id,
         params = {
             "key": api_key,
-            "minutesBefore": "5",
+            "minutesBefore": "0",
             "minutesAfter": "120",
             "includeReferences": "false",
             "includeSituations": "false",
             "version": "2",
-        })
+        },
+        ttl_seconds = 180,
+        )
+
     if rep.status_code != 200:
         fail("Predictions request failed with status ", rep.status_code)
-
-    # TODO: Determine if this cache call can be converted to the new HTTP cache.
-    cache.set(stop_id, rep.body(), ttl_seconds = 60)
 
     return rep.json()
 
