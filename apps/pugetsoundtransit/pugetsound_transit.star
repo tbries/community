@@ -18,6 +18,7 @@ API_BASE = "https://api.pugetsound.onebusaway.org/api"
 API_ARRIVALS_AND_DEPARTURES = API_BASE + "/where/arrivals-and-departures-for-stop/%s.json"
 API_KEY = ""
 DEFAULT_STOPID = "1_64561" # Issaquah Highlands Park & Ride, Bay 4
+DEFAULT_ROUTEID = "40_100240" # 554 Express to Seattle
 
 def main(config):
     # Initialize API token, bus stop, and max predictions number with fallbacks
@@ -27,19 +28,46 @@ def main(config):
     if stop_id == None:
         stop_id = DEFAULT_STOPID
 
+    route_id = config.get("route_id")
+    if route_id == None:
+        route_id = DEFAULT_ROUTEID
+
     # Call API to get predictions for the given stop
     data = get_times(stop_id, api_key)
 
-    nextArrival_unix = int(data["data"]["entry"]["arrivalsAndDepartures"][0]["predictedArrivalTime"] / 1000)
-    nextArrival_time = time.from_timestamp(nextArrival_unix)
-    now_time = time.now()
+    bus_arrivals = []
+    for bus in data["data"]["entry"]["arrivalsAndDepartures"]:
+        if bus["routeId"] == route_id:
+            bus_arrivals.append(
+                {
+                    "predictedArrivalTime": bus["predictedArrivalTime"],
+                    "scheduledArrivalTime": bus["scheduledArrivalTime"],
+                }
+            )
 
-    # Calculate time until next bus
-    diff = nextArrival_time - now_time
-    diff_minutes = int(diff.minutes)
+    if len(bus_arrivals) == 0:
+        return render.Root(
+            child = render.Text("No buses found"),
+        )
+
+    relative_arrival_str = ""
+    now_time = time.now()
+    for bus in bus_arrivals:
+        # use predicted arrival time if available, otherwise use scheduled arrival time
+        if bus["predictedArrivalTime"] > 0:
+            nextArrival_unix = int(bus["predictedArrivalTime"] / 1000)
+        else:
+            nextArrival_unix = int(bus["scheduledArrivalTime"] / 1000)
+        
+        nextArrival_time = time.from_timestamp(nextArrival_unix)
+        # Calculate time until next bus
+        diff = nextArrival_time - now_time
+        diff_minutes = int(diff.minutes)
+
+        relative_arrival_str += str(diff_minutes) + " "
 
     return render.Root(
-        child = render.Text("data: " + str(diff_minutes)),
+        child = render.Text("buses: " + relative_arrival_str),
     )
 
 def get_times(stop_id, api_key):
@@ -72,6 +100,13 @@ def get_schema():
                 desc = "OBA Bus Stop ID",
                 icon = "bus",
                 default = "1_64561", # Issaquah Highlands Park & Ride, Bay 4
+            ),
+            schema.Text(
+                id = "route_id",
+                name = "Route ID",
+                desc = "Bus Route ID",
+                icon = "bus",
+                default = "40_100240", # 554E
             ),
         ],
     )
