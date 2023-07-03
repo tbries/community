@@ -50,25 +50,93 @@ def main(config):
             child = render.Text("No buses found"),
         )
 
-    relative_arrival_str = ""
+    relative_arrivals = []
     now_time = time.now()
     for bus in bus_arrivals:
         # use predicted arrival time if available, otherwise use scheduled arrival time
         if bus["predictedArrivalTime"] > 0:
             nextArrival_unix = int(bus["predictedArrivalTime"] / 1000)
+
+            if bus["predictedArrivalTime"] == bus["scheduledArrivalTime"]:
+                # Use green if predicted time is the same as scheduled time.
+                prediction_color = "#00ff00"
+            elif bus["predictedArrivalTime"] < bus["scheduledArrivalTime"]:
+                # Use red if predicted time is earlier than scheduled time.
+                prediction_color = "#ff0000"
+            else:
+                # Use blue if predicted time is later than scheduled time.
+                prediction_color = "#0000ff"
         else:
             nextArrival_unix = int(bus["scheduledArrivalTime"] / 1000)
+            # Use white if scheduled time is used.
+            prediction_color = "#ffffff"
         
         nextArrival_time = time.from_timestamp(nextArrival_unix)
         # Calculate time until next bus
         diff = nextArrival_time - now_time
         diff_minutes = int(diff.minutes)
 
-        relative_arrival_str += str(diff_minutes) + " "
+        relative_arrivals.append(render.Text(content="%s " % diff_minutes, color=prediction_color))
 
     return render.Root(
-        child = render.Text("buses: " + relative_arrival_str),
+        child = render.Column(
+            children = [
+                render.Row(
+                    children = [
+                        render.Padding(
+                            child = render.Circle(
+                                    color="#2B376E",
+                                    diameter=14,
+                                    child=render.Text(content='554',font='tom-thumb'),
+                                ),
+                            pad = 1
+                        ),
+                        render.Column(
+                            children = [
+                                render.Marquee(
+                                    child = render.Text(content="Issaquah Highlands Park & Ride - Bay 4"),
+                                    width=48
+                                ),
+                                render.Marquee(
+                                    child = render.Row(
+                                        children = relative_arrivals
+                                    ),
+                                    width=48
+                                ),
+                            ]
+                        )
+                    ]
+                ),
+                render.Row(
+                    children = [
+                        render.Padding(
+                            child = render.Circle(
+                                    color="#2B376E",
+                                    diameter=14,
+                                    child=render.Text(content='554',font='tom-thumb'),
+                                ),
+                            pad = 1
+                        ),
+                        render.Column(
+                            children = [
+                                render.Marquee(
+                                    child = render.Text(content="N Mercer Way & 80th Ave SE - Bay 1"),
+                                    width=48
+                                ),
+                                render.Marquee(
+                                    child = render.Row(
+                                        children = relative_arrivals
+                                    ),
+                                    width=48
+                                ),
+                            ]
+                        )
+                    ]
+                ),
+            ]
+        )
     )
+
 
 def get_times(stop_id, api_key):
     # Call API to get predictions for the given stop
