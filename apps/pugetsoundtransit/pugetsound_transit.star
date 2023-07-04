@@ -24,6 +24,8 @@ def main(config):
     # Initialize API token, bus stop, and max predictions number with fallbacks
     api_key = API_KEY
 
+    scroll_speed_ms = int(config.str("scroll_speed", 100))
+
     stop_id = config.get("stop_id")
     if stop_id == None:
         stop_id = DEFAULT_STOPID
@@ -79,6 +81,7 @@ def main(config):
         relative_arrivals.append(render.Text(content="%s " % diff_minutes, color=prediction_color))
 
     return render.Root(
+        delay = scroll_speed_ms,
         child = render.Column(
             children = [
                 render.Row(
@@ -159,6 +162,15 @@ def get_times(stop_id, api_key):
     return rep.json()
 
 def get_schema():
+
+    scroll_speed = [
+        schema.Option(display = "Slowest", value = "200"),
+        schema.Option(display = "Slower", value = "150"),
+        schema.Option(display = "Default", value = "100"),
+        schema.Option(display = "Faster", value = "60"),
+        schema.Option(display = "Fastest", value = "30"),
+    ]
+
     return schema.Schema(
         version = "1",
         fields = [
@@ -175,6 +187,14 @@ def get_schema():
                 desc = "Bus Route ID",
                 icon = "bus",
                 default = "40_100240", # 554E
+            ),
+            schema.Dropdown(
+                id = "scroll_speed",
+                name = "Scroll speed",
+                desc = "Text scrolling speed",
+                icon = "gaugeHigh",
+                default = scroll_speed[2].value,
+                options = scroll_speed,
             ),
         ],
     )
