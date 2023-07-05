@@ -5,52 +5,56 @@ Description: TBD
 Author: tbries
 """
 
-load("cache.star", "cache")
-load("encoding/json.star", "json")
 load("http.star", "http")
-load("math.star", "math")
 load("render.star", "render")
 load("schema.star", "schema")
 load("secret.star", "secret")
 load("time.star", "time")
 
+API_KEY = "" # TODO: Encrpt this.
 API_BASE = "https://api.pugetsound.onebusaway.org/api"
 API_ARRIVALS_AND_DEPARTURES = API_BASE + "/where/arrivals-and-departures-for-stop/%s.json"
-API_KEY = ""
+API_STOPS = API_BASE + "/where/stop/%s.json"
+
 DEFAULT_STOPID = "1_64561" # Issaquah Highlands Park & Ride, Bay 4
 DEFAULT_ROUTEID = "40_100240" # 554 Express to Seattle
 
 def main(config):
-    # Initialize API token, bus stop, and max predictions number with fallbacks
+
+    # TODO: Decrypt API key.
     api_key = API_KEY
 
-    scroll_speed_ms = int(config.str("scroll_speed", 100))
+    scroll_speed_ms = int(config.str("scroll_speed"))
+    if scroll_speed_ms <= 0:
+        scroll_speed_ms = 100
 
     stop_id = config.get("stop_id")
-    if stop_id == None:
+    if stop_id == "":
         stop_id = DEFAULT_STOPID
 
     route_id = config.get("route_id")
-    if route_id == None:
+    if route_id == "":
         route_id = DEFAULT_ROUTEID
 
     # Call API to get predictions for the given stop
-    data = get_times(stop_id, api_key)
-
-    bus_arrivals = []
-    for bus in data["data"]["entry"]["arrivalsAndDepartures"]:
-        if bus["routeId"] == route_id:
-            bus_arrivals.append(
-                {
-                    "predictedArrivalTime": bus["predictedArrivalTime"],
-                    "scheduledArrivalTime": bus["scheduledArrivalTime"],
-                }
-            )
+    bus_arrivals = get_arrival_times(stop_id, route_id, api_key)
 
     if len(bus_arrivals) == 0:
         return render.Root(
             child = render.Text("No buses found"),
         )
+
+    stop_info = get_stop_and_route_info(stop_id, api_key)
+
+    # Get the route info that matches route_id.
+    route_info = None
+    for route in stop_info["routes"]:
+        if route["id"] == route_id:
+            route_info = route
+            break
+
+    # TODO: Pick a color for the route if one is not provided.
+    # TODO: Shorten the 'shortName' if it is too long to fit in the circle.
 
     relative_arrivals = []
     now_time = time.now()
@@ -88,42 +92,16 @@ def main(config):
                     children = [
                         render.Padding(
                             child = render.Circle(
-                                    color="#2B376E",
+                                    color=route_info['color'],
                                     diameter=14,
-                                    child=render.Text(content='554',font='tom-thumb'),
+                                    child=render.Text(content=route_info['shortName'],font='tom-thumb'),
                                 ),
                             pad = 1
                         ),
                         render.Column(
                             children = [
                                 render.Marquee(
-                                    child = render.Text(content="Issaquah Highlands Park & Ride - Bay 4"),
-                                    width=48
-                                ),
-                                render.Marquee(
-                                    child = render.Row(
-                                        children = relative_arrivals
-                                    ),
-                                    width=48
-                                ),
-                            ]
-                        )
-                    ]
-                ),
-                render.Row(
-                    children = [
-                        render.Padding(
-                            child = render.Circle(
-                                    color="#2B376E",
-                                    diameter=14,
-                                    child=render.Text(content='554',font='tom-thumb'),
-                                ),
-                            pad = 1
-                        ),
-                        render.Column(
-                            children = [
-                                render.Marquee(
-                                    child = render.Text(content="N Mercer Way & 80th Ave SE - Bay 1"),
+                                    child = render.Text(content=stop_info["name"]),
                                     width=48
                                 ),
                                 render.Marquee(
@@ -141,8 +119,8 @@ def main(config):
     )
 
 
-def get_times(stop_id, api_key):
-    # Call API to get predictions for the given stop
+def get_arrival_times(stop_id, route_id, api_key):
+    # Call OBA API to get predictions for the given stop.
     rep = http.get(
         url = API_ARRIVALS_AND_DEPARTURES % stop_id,
         params = {
@@ -154,12 +132,68 @@ def get_times(stop_id, api_key):
             "version": "2",
         },
         ttl_seconds = 180,
-        )
+    )
 
     if rep.status_code != 200:
         fail("Predictions request failed with status ", rep.status_code)
 
-    return rep.json()
+    json_data = rep.json()
+
+    bus_arrivals = []
+    for bus in json_data["data"]["entry"]["arrivalsAndDepartures"]:
+
+        # Skip buses with departures disabled, i.e. this will be the bus's last stop.
+        if bus["departureEnabled"] == False:
+            continue
+
+        if bus["routeId"] == route_id:
+            bus_arrivals.append(
+                {
+                    "predictedArrivalTime": bus["predictedArrivalTime"],
+                    "scheduledArrivalTime": bus["scheduledArrivalTime"],
+                }
+            )
+
+    return bus_arrivals
+
+
+def get_stop_and_route_info(stop_id, api_key):
+    # Call OBA API to get information about the given stop.
+    rep = http.get(
+        url = API_STOPS % stop_id,
+        params = {
+            "key": api_key,
+            "includeReferences": "true",
+            "version": "2",
+        },
+        ttl_seconds = 3600, # 1 hour cache since this data shouldn't change often.
+    )
+
+    if rep.status_code != 200:
+        fail("Stop info request failed with status ", rep.status_code)
+
+    json_data = rep.json()
+
+    stop_info = {
+        "name": json_data["data"]["entry"]["name"],
+        "routes": [],
+    }
+
+    # Pull out info for each route that stops at this stop.
+    for route in json_data["data"]["references"]["routes"]:
+        stop_info["routes"].append(
+            {
+                "id": route["id"],
+                "shortName": route["shortName"],
+                "longName": route["longName"],
+                "description": route["description"],
+                "color": route["color"],
+                "agencyId": route["agencyId"],
+            }
+        )
+
+    return stop_info
+
 
 def get_schema():
 
@@ -183,7 +217,7 @@ def get_schema():
             ),
             schema.Text(
                 id = "route_id",
-                name = "Route ID",
+                name = "Route",
                 desc = "Bus Route ID",
                 icon = "bus",
                 default = "40_100240", # 554E
