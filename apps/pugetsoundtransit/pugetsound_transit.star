@@ -38,12 +38,6 @@ def main(config):
 
     # Call API to get predictions for the given stop
     bus_arrivals = get_arrival_times(stop_id, route_id, api_key)
-
-    if len(bus_arrivals) == 0:
-        return render.Root(
-            child = render.Text("No buses found"),
-        )
-
     stop_info = get_stop_and_route_info(stop_id, api_key)
 
     # Get the route info that matches route_id.
@@ -55,34 +49,6 @@ def main(config):
 
     # TODO: Pick a color for the route if one is not provided.
     # TODO: Shorten the 'shortName' if it is too long to fit in the circle.
-
-    relative_arrivals = []
-    now_time = time.now()
-    for bus in bus_arrivals:
-        # use predicted arrival time if available, otherwise use scheduled arrival time
-        if bus["predictedArrivalTime"] > 0:
-            nextArrival_unix = int(bus["predictedArrivalTime"] / 1000)
-
-            if bus["predictedArrivalTime"] == bus["scheduledArrivalTime"]:
-                # Use green if predicted time is the same as scheduled time.
-                prediction_color = "#00ff00"
-            elif bus["predictedArrivalTime"] < bus["scheduledArrivalTime"]:
-                # Use red if predicted time is earlier than scheduled time.
-                prediction_color = "#ff0000"
-            else:
-                # Use blue if predicted time is later than scheduled time.
-                prediction_color = "#0000ff"
-        else:
-            nextArrival_unix = int(bus["scheduledArrivalTime"] / 1000)
-            # Use white if scheduled time is used.
-            prediction_color = "#ffffff"
-        
-        nextArrival_time = time.from_timestamp(nextArrival_unix)
-        # Calculate time until next bus
-        diff = nextArrival_time - now_time
-        diff_minutes = int(diff.minutes)
-
-        relative_arrivals.append(render.Text(content="%s " % diff_minutes, color=prediction_color))
 
     return render.Root(
         delay = scroll_speed_ms,
@@ -106,7 +72,7 @@ def main(config):
                                 ),
                                 render.Marquee(
                                     child = render.Row(
-                                        children = relative_arrivals
+                                        children = compute_arrival_texts(bus_arrivals)
                                     ),
                                     width=48
                                 ),
@@ -193,6 +159,43 @@ def get_stop_and_route_info(stop_id, api_key):
         )
 
     return stop_info
+
+
+def compute_arrival_texts(bus_arrivals):
+
+    if len(bus_arrivals) == 0:
+        return [render.Text(content="NONE")]
+    
+    relative_arrivals = []
+    now_time = time.now()
+
+    for bus in bus_arrivals:
+        # use predicted arrival time if available, otherwise use scheduled arrival time
+        if bus["predictedArrivalTime"] > 0:
+            nextArrival_unix = int(bus["predictedArrivalTime"] / 1000)
+
+            if bus["predictedArrivalTime"] == bus["scheduledArrivalTime"]:
+                # Use green if predicted time is the same as scheduled time.
+                prediction_color = "#00ff00"
+            elif bus["predictedArrivalTime"] < bus["scheduledArrivalTime"]:
+                # Use red if predicted time is earlier than scheduled time.
+                prediction_color = "#ff0000"
+            else:
+                # Use blue if predicted time is later than scheduled time.
+                prediction_color = "#0000ff"
+        else:
+            nextArrival_unix = int(bus["scheduledArrivalTime"] / 1000)
+            # Use white if scheduled time is used.
+            prediction_color = "#ffffff"
+        
+        nextArrival_time = time.from_timestamp(nextArrival_unix)
+        # Calculate time until next bus
+        diff = nextArrival_time - now_time
+        diff_minutes = int(diff.minutes)
+
+        relative_arrivals.append(render.Text(content="%s " % diff_minutes, color=prediction_color))
+
+    return relative_arrivals
 
 
 def get_schema():
