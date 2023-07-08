@@ -10,11 +10,14 @@ load("render.star", "render")
 load("schema.star", "schema")
 load("secret.star", "secret")
 load("time.star", "time")
+load("math.star", "math")
+load("encoding/json.star", "json")
 
 API_KEY = "" # TODO: Encrpt this.
 API_BASE = "https://api.pugetsound.onebusaway.org/api"
 API_ARRIVALS_AND_DEPARTURES = API_BASE + "/where/arrivals-and-departures-for-stop/%s.json"
 API_STOPS = API_BASE + "/where/stop/%s.json"
+API_STOPS_FOR_LOCATION = API_BASE + "/where/stops-for-location.json"
 
 DEFAULT_STOPID = "1_64561" # Issaquah Highlands Park & Ride, Bay 4
 DEFAULT_ROUTEID = "40_100240" # 554 Express to Seattle
@@ -24,16 +27,20 @@ def main(config):
     # TODO: Decrypt API key.
     api_key = API_KEY
 
-    scroll_speed_ms = int(config.str("scroll_speed"))
-    if scroll_speed_ms <= 0:
+    scroll_speed_ms = config.get("scroll_speed")
+    if scroll_speed_ms == None:
         scroll_speed_ms = 100
+    else:
+        scroll_speed_ms = int(scroll_speed_ms)
 
     stop_id = config.get("stop_id")
-    if stop_id == "":
+    if stop_id == None or stop_id == "":
         stop_id = DEFAULT_STOPID
+    else:
+        stop_id = json.decode(stop_id)["value"]
 
     route_id = config.get("route_id")
-    if route_id == "":
+    if route_id == None or route_id == "":
         route_id = DEFAULT_ROUTEID
 
     # Call API to get predictions for the given stop
@@ -198,6 +205,40 @@ def compute_arrival_texts(bus_arrivals):
     return relative_arrivals
 
 
+def distance(stop, location):
+    # Distance metric for sorting stops
+    return math.pow(stop["lat"] - float(location["lat"]), 2) + math.pow(stop["lon"] - float(location["lng"]), 2)
+
+
+def get_stops_for_location(location):
+
+    # TODO: Decrypt API key.
+    api_key = API_KEY
+    loc = json.decode(location)
+
+    rep = http.get(
+        url = API_STOPS_FOR_LOCATION,
+        params = {
+            "key": api_key,
+            "lat": str(loc["lat"]),
+            "lon": str(loc["lng"]),
+            "version": "2",
+            "includeReferences": "false",
+        },
+        ttl_seconds = 3600, # 1 hour cache since this data shouldn't change often.
+    )
+
+    if rep.status_code != 200:
+        fail("Stops for location request failed with status ", rep.status_code)
+
+    stops = rep.json()["data"]["list"]
+
+    return [
+        schema.Option(display = stop["name"], value = str(stop["id"]))
+        for stop in sorted(stops, key = lambda x: distance(x, loc))[:20]
+    ]
+
+
 def get_schema():
 
     scroll_speed = [
@@ -211,12 +252,12 @@ def get_schema():
     return schema.Schema(
         version = "1",
         fields = [
-            schema.Text(
+            schema.LocationBased(
                 id = "stop_id",
                 name = "Bus Stop",
-                desc = "OBA Bus Stop ID",
+                desc = "Choose from the 20 nearest stops",
                 icon = "bus",
-                default = "1_64561", # Issaquah Highlands Park & Ride, Bay 4
+                handler = get_stops_for_location,
             ),
             schema.Text(
                 id = "route_id",
