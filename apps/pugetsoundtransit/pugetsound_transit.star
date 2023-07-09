@@ -37,22 +37,15 @@ def main(config):
     if stop_id == None or stop_id == "":
         stop_id = DEFAULT_STOPID
     else:
-        stop_id = json.decode(stop_id)["value"]
+        stop_info = json.decode(json.decode(stop_id)["value"])
+        stop_id = stop_info["id"]
 
     route_id = config.get("route_id")
     if route_id == None or route_id == "":
         route_id = DEFAULT_ROUTEID
 
     # Call API to get predictions for the given stop
-    bus_arrivals = get_arrival_times(stop_id, route_id, api_key)
-    stop_info = get_stop_and_route_info(stop_id, api_key)
-
-    # Get the route info that matches route_id.
-    route_info = None
-    for route in stop_info["routes"]:
-        if route["id"] == route_id:
-            route_info = route
-            break
+    arrival_info = get_arrival_info(stop_id, route_id, api_key)
 
     # TODO: Pick a color for the route if one is not provided.
     # TODO: Shorten the 'shortName' if it is too long to fit in the circle.
@@ -65,21 +58,21 @@ def main(config):
                     children = [
                         render.Padding(
                             child = render.Circle(
-                                    color=route_info['color'],
+                                    color=arrival_info["route_color"],
                                     diameter=14,
-                                    child=render.Text(content=route_info['shortName'],font='tom-thumb'),
+                                    child=render.Text(content=arrival_info["route_short_name"],font='tom-thumb'),
                                 ),
                             pad = 1
                         ),
                         render.Column(
                             children = [
                                 render.Marquee(
-                                    child = render.Text(content=stop_info["name"]),
+                                    child = render.Text(content=arrival_info["stop_name"]),
                                     width=48
                                 ),
                                 render.Marquee(
                                     child = render.Row(
-                                        children = compute_arrival_texts(bus_arrivals)
+                                        children = compute_arrival_texts(arrival_info["arrival_times"])
                                     ),
                                     width=48
                                 ),
@@ -92,7 +85,7 @@ def main(config):
     )
 
 
-def get_arrival_times(stop_id, route_id, api_key):
+def get_arrival_info(stop_id, route_id, api_key):
     # Call OBA API to get predictions for the given stop.
     rep = http.get(
         url = API_ARRIVALS_AND_DEPARTURES % stop_id,
@@ -100,7 +93,7 @@ def get_arrival_times(stop_id, route_id, api_key):
             "key": api_key,
             "minutesBefore": "0",
             "minutesAfter": "120",
-            "includeReferences": "false",
+            "includeReferences": "true",
             "includeSituations": "false",
             "version": "2",
         },
@@ -112,7 +105,19 @@ def get_arrival_times(stop_id, route_id, api_key):
 
     json_data = rep.json()
 
-    bus_arrivals = []
+    stop_name = "UNKNOWN STOP"
+    for stop in json_data["data"]["references"]["stops"]:
+        if stop["id"] == stop_id:
+            stop_name = stop["name"]
+
+    route_short_name = "UNK"
+    route_color = "#333333"
+    for route in json_data["data"]["references"]["routes"]:
+        if route["id"] == route_id:
+            route_short_name = route["shortName"]
+            route_color = route["color"] if route["color"] != "" else "#333333"
+
+    arrival_times = []
     for bus in json_data["data"]["entry"]["arrivalsAndDepartures"]:
 
         # Skip buses with departures disabled, i.e. this will be the bus's last stop.
@@ -120,52 +125,19 @@ def get_arrival_times(stop_id, route_id, api_key):
             continue
 
         if bus["routeId"] == route_id:
-            bus_arrivals.append(
+            arrival_times.append(
                 {
                     "predictedArrivalTime": bus["predictedArrivalTime"],
                     "scheduledArrivalTime": bus["scheduledArrivalTime"],
                 }
             )
 
-    return bus_arrivals
-
-
-def get_stop_and_route_info(stop_id, api_key):
-    # Call OBA API to get information about the given stop.
-    rep = http.get(
-        url = API_STOPS % stop_id,
-        params = {
-            "key": api_key,
-            "includeReferences": "true",
-            "version": "2",
-        },
-        ttl_seconds = 3600, # 1 hour cache since this data shouldn't change often.
-    )
-
-    if rep.status_code != 200:
-        fail("Stop info request failed with status ", rep.status_code)
-
-    json_data = rep.json()
-
-    stop_info = {
-        "name": json_data["data"]["entry"]["name"],
-        "routes": [],
+    return {
+        "stop_name": stop_name,
+        "route_short_name": route_short_name,
+        "route_color": route_color,
+        "arrival_times": arrival_times,
     }
-
-    # Pull out info for each route that stops at this stop.
-    for route in json_data["data"]["references"]["routes"]:
-        stop_info["routes"].append(
-            {
-                "id": route["id"],
-                "shortName": route["shortName"],
-                "longName": route["longName"],
-                "description": route["description"],
-                "color": route["color"],
-                "agencyId": route["agencyId"],
-            }
-        )
-
-    return stop_info
 
 
 def compute_arrival_texts(bus_arrivals):
@@ -220,10 +192,10 @@ def get_stops_for_location(location):
         url = API_STOPS_FOR_LOCATION,
         params = {
             "key": api_key,
-            "lat": str(loc["lat"]),
-            "lon": str(loc["lng"]),
+            "lat": str(loc["lat"]),#"47.543",
+            "lon": str(loc["lng"]),#"-122.018",
             "version": "2",
-            "includeReferences": "false",
+            "includeReferences": "true",
         },
         ttl_seconds = 3600, # 1 hour cache since this data shouldn't change often.
     )
@@ -231,12 +203,55 @@ def get_stops_for_location(location):
     if rep.status_code != 200:
         fail("Stops for location request failed with status ", rep.status_code)
 
-    stops = rep.json()["data"]["list"]
+    json_data = rep.json()
+    stops = json_data["data"]["list"]
+    routes = json_data["data"]["references"]["routes"]
+
+    options = []
+
+    for stop in sorted(stops, key = lambda x: distance(x, loc))[:20]:
+
+        routes_for_stop = []
+        for route in routes:
+            if route["id"] in stop["routeIds"]:
+                routes_for_stop.append({
+                    "id": route["id"],
+                    "shortName": route["shortName"],
+                    "description": route["description"],
+                })
+
+        stop_info = {
+            "id": stop["id"],
+            "name": stop["name"],
+            "routes": routes_for_stop,
+        }
+
+        options.append(
+            schema.Option(display = stop["name"], value = json.encode(stop_info))
+        )
+
+    return options
+
+
+def get_routes_for_stop(stop_id):
+
+    stop_info = json.decode(json.decode(stop_id)["value"])
+    options = []
+
+    for route in stop_info["routes"]:
+        display_text = "%s - %s" % (route["shortName"], route["description"])
+        options.append(schema.Option(display = display_text, value = route["id"]))
 
     return [
-        schema.Option(display = stop["name"], value = str(stop["id"]))
-        for stop in sorted(stops, key = lambda x: distance(x, loc))[:20]
-    ]
+        schema.Dropdown(
+            id = "route_id",
+            name = "Route",
+            desc = "Choose from routes that service this stop",
+            # TODO: Choose an icon based on the stop type?
+            icon = "bus",
+            options = options,
+            default = options[0].value,
+        )]
 
 
 def get_schema():
@@ -252,20 +267,6 @@ def get_schema():
     return schema.Schema(
         version = "1",
         fields = [
-            schema.LocationBased(
-                id = "stop_id",
-                name = "Bus Stop",
-                desc = "Choose from the 20 nearest stops",
-                icon = "bus",
-                handler = get_stops_for_location,
-            ),
-            schema.Text(
-                id = "route_id",
-                name = "Route",
-                desc = "Bus Route ID",
-                icon = "bus",
-                default = "40_100240", # 554E
-            ),
             schema.Dropdown(
                 id = "scroll_speed",
                 name = "Scroll speed",
@@ -273,6 +274,18 @@ def get_schema():
                 icon = "gaugeHigh",
                 default = scroll_speed[2].value,
                 options = scroll_speed,
+            ),
+            schema.LocationBased(
+                id = "stop_id",
+                name = "Bus Stop",
+                desc = "Choose from the 20 nearest stops",
+                icon = "bus",
+                handler = get_stops_for_location,
+            ),
+            schema.Generated(
+                id = "routes_for_stop",
+                source = "stop_id",
+                handler = get_routes_for_stop,
             ),
         ],
     )
